@@ -96,7 +96,6 @@ class NetworkBackend:
 
             mac_vendor = self.resolve_mac_vendor(mac_addr)
 
-
             iface = NetworkInterface(
                 name = name,
                 mac_addr = mac_addr,
