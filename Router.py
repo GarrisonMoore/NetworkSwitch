@@ -1,12 +1,16 @@
 import os
-import subprocess
+import platform
+import socket
 import json
 import time
 import requests
+import psutil
 from Utils import Decorators
 
 timer = Decorators.timer
 verbose = Decorators.verbose_mode
+
+os_name = platform.system()
 
 class NetworkInterface:
     """
@@ -73,35 +77,33 @@ class NetworkBackend:
         Returns a list of NetworkInterface Objects
         """
         interfaces=[]
+        stats = psutil.net_if_stats()
 
-        # run network cmd to get interface stats in json
-        result = subprocess.run(["ip", "-j", "addr"], capture_output=True, text=True)
-        # convert from json to list / dict
-        raw_data = json.loads(result.stdout)
-
-        # get each adapter
-        for entry in raw_data:
-            name = entry.get("ifname")
-            # skip loopback
-            if name == "lo":
+        for name, addr_list in psutil.net_if_addrs().items():
+            if name == "lo" or "loopback" in name.lower():
                 continue
 
-            # Checks if the interface is enabled (works for physical NICs AND virtual TUN/VPN interfaces)
-            is_up = "UP" in entry.get("flags", [])
-
-            # get ip addr
+            mac_addr = None
             ip_addr = None
-            for addr in entry.get("addr_info", []):
-                if addr.get("family") == "inet":
-                    ip_addr = addr.get("local")
 
-            # get mac
-            mac_addr = entry.get("address")
+            for addr in addr_list:
+                if addr.family == psutil.AF_LINK:
+                    mac_addr = addr.address.replace("-", ":").lower()
+                elif addr.family == socket.AF_INET:
+                    ip_addr = addr.address
+
+            isup = stats[name].isup if name in stats else False
 
             mac_vendor = self.resolve_mac_vendor(mac_addr)
 
-            # assign to NetworkInterface object and append to interfaces list
-            iface = NetworkInterface(name=name, mac_addr=mac_addr, mac_vendor=mac_vendor,is_up=is_up, ip_addr=ip_addr)
+
+            iface = NetworkInterface(
+                name = name,
+                mac_addr = mac_addr,
+                mac_vendor= mac_vendor,
+                ip_addr = ip_addr,
+                is_up = isup
+            )
             interfaces.append(iface)
 
         return interfaces
@@ -110,16 +112,22 @@ class NetworkBackend:
         """
         Gets the systems default routes
         """
-        # Cmd gets the default route(s)
-        result = subprocess.run(["ip", "-j", "route", "show", "default"], capture_output=True, text=True)
-        raw_routes = json.loads(result.stdout)
-
-        # loop through the returned list and check for more than 1 route
+        raw_routes = ""
         default_ifaces = []
-        for route in raw_routes:
-            dev = route.get("dev")
-            if dev and dev not in default_ifaces:
-                default_ifaces.append(dev)
+
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                outbound_ip = s.getsockname()[0]
+
+            for name, addr_list in psutil.net_if_addrs().items():
+                for addr in addr_list:
+                    if addr.family == socket.AF_INET and addr.address == outbound_ip:
+                        if name not in default_ifaces:
+                            default_ifaces.append(name)
+
+        except OSError:
+            pass
 
         return default_ifaces
 
