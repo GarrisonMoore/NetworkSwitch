@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QLineEdit, QFrame, QGridLayout,
     QDialog, QFormLayout, QCheckBox, QComboBox, QListWidgetItem, QListWidget, QScrollArea
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from Router import RouterUnit, NetworkBackend, PortJack, NetworkInterface
 
 backend = NetworkBackend()
@@ -42,6 +42,8 @@ SWITCH_RED_SHADOW = "#7f1d1d"  # Pressed-in dark red half
 SWITCH_HIGHLIGHT = "#fca5a5"  # Top edge specular highlight
 SWITCH_CREASE = "#3b0707"  # Center pivot divider line
 
+def ScanWorker(QThread):
+    finished = Signal(list)
 def truncate_text(text: str, max_len: int = 15) -> str:
     return text if len(text) <= max_len else text[:max_len - 3] + "..."
 
@@ -147,11 +149,11 @@ class PortConfigWindow(QDialog):
         """
         self.whitelist.takeItem(self.whitelist.row(item))
 
-    def save_config(self, is_local: bool):
+    def save_config(self):
         """
         Saves the current configuration to the Jack instance.
         """
-        if is_local:
+        if self.jack.interface.is_local:
             self.add_whitelist_entry()
             self.jack.enabled = self.enabled_cb.isChecked()
             self.jack.protocol = self.protocol_box.currentText()
@@ -219,10 +221,13 @@ class MainWindow(QMainWindow):
 
         # 2. Give the box a layout so it holds items inside it
         grid = QGridLayout(chassis_box)
-        label = QLabel(f"{iface.name} {status}\n"
-                       f"{iface.ip_addr}\n"
-                       f"{iface.mac_addr}\n"
-                       f"{truncate_text(iface.mac_vendor)}")
+        label = QLabel(
+                f"{status}"
+                f"{iface.name}\n"
+                f"{iface.ip_addr}\n"
+                f"{iface.mac_addr}\n"
+                f"{truncate_text(iface.mac_vendor)}"
+                )
 
         label.setFixedWidth(150)
         grid.addWidget(label, 0, 0, 2, 1)
@@ -243,7 +248,6 @@ class MainWindow(QMainWindow):
         """
         Creates the ISP bay using QFrame
         """
-
         default_routes = backend.get_default_interface()
         if not default_routes:
             return
@@ -253,7 +257,6 @@ class MainWindow(QMainWindow):
 
         for router in remote_routers:
             self.remote_rack.addWidget(self.create_router_chassis(router))
-
 
 if __name__ == "__main__":
     # You need one (and only one) QApplication instance per application.
