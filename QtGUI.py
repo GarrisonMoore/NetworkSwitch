@@ -164,14 +164,24 @@ class MainWindow(QMainWindow):
         container = QWidget()
         self.main_layout = QHBoxLayout(container)
 
-        # Left column: Local NICs
+        # Local NICs
         self.local_rack = QVBoxLayout()
         self.local_rack.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self.local_rack_label = QLabel("Local NICs")
+        self.local_rack_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px;")
+        self.local_rack_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.local_rack.addWidget(self.local_rack_label)
         self.main_layout.addLayout(self.local_rack)
 
-        # Right column: Discovered LAN Hosts
+        # Discovered LAN Hosts
         self.remote_rack = QVBoxLayout()
         self.remote_rack.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self.remote_rack_label = QLabel("Discovered LAN Hosts")
+        self.remote_rack_label.setStyleSheet("font-weight: bold; font-size: 14px; padding: 5px;")
+        self.remote_rack_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.remote_rack.addWidget(self.remote_rack_label)
         self.main_layout.addLayout(self.remote_rack)
 
         # necessary idk why
