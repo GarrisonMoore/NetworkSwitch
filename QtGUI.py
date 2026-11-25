@@ -1,27 +1,194 @@
 import sys
 
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLabel, QPushButton, QLineEdit, QFrame
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QLineEdit, QFrame, QGridLayout,
+    QDialog, QFormLayout, QCheckBox, QComboBox, QListWidgetItem, QListWidget
+)
+from PySide6.QtCore import Qt
+
+from Router import RouterUnit, NetworkBackend, PortJack, NetworkInterface
+
+backend = NetworkBackend()
+routers = [RouterUnit(iface, ports_quant=20) for iface in backend.get_all_interfaces()]
+
+# --- UI Color Palette ---
+BG_CANVAS        = "#808080"  # Medium grey rack background
+BG_CHASSIS       = "#1e1e1e"  # Dark charcoal router unit housing
+BG_PORT_HOUSING  = "#2b2f36"  # Gunmetal outer RJ45 cage
+BG_PORT_RECESS   = "#1f2229"  # Dark recessed inner port face
+BG_PORT_CAVITY   = "#0d0e11"  # Near-black RJ45 socket interior
+BG_LED_HOUSING   = "#111317"  # Dark LED bezel
+
+# Metallic Bevel Highlights & Shadows
+METAL_LIGHT_TOP  = "#c4ccd4"  # Bright brushed-steel top edge
+METAL_LIGHT_LEFT = "#aeb6bf"  # Silver-grey left edge
+METAL_DARK_BOT   = "#141619"  # Deep shadow bottom edge
+METAL_DARK_RIGHT = "#181b20"  # Dark iron right edge
+METAL_TRIM       = "#5a626e"  # Mid-tone steel inner trim
+SOCKET_OUTLINE   = "#6c7582"  # Light steel socket rim
+LED_OUTLINE      = "#4a5058"  # Muted steel LED rim
+
+# Port Accents, Pins & Status LEDs
+ACCENT_WAN       = "#d97706"  # Amber / orange WAN stripe
+ACCENT_LAN       = "#f3f4f6"  # Crisp off-white LAN stripe
+GOLD_PIN         = "#d4af37"  # Metallic gold RJ45 contact pins
+LED_ACTIVE       = "#00ff00"  # Bright green traffic LED
+LED_OFF          = "#1a241a"  # Unlit dark LED
+
+# Rocker Switch Colors
+SWITCH_BEZEL       = "#111317"  # Dark plastic outer switch housing
+SWITCH_RED_HIGH    = "#ef4444"  # Lit / raised crimson half
+SWITCH_RED_MID     = "#b91c1c"  # Unlit raised red half
+SWITCH_RED_SHADOW  = "#7f1d1d"  # Pressed-in dark red half
+SWITCH_HIGHLIGHT   = "#fca5a5"  # Top edge specular highlight
+SWITCH_CREASE      = "#3b0707"  # Center pivot divider line
+
+def truncate_text(text: str, max_len: int = 15) -> str:
+    return text if len(text) <= max_len else text[:max_len -3] + "..."
+
+class PortWidget(QFrame):
+    def __init__(self, jack: PortJack, accent_color: str = ACCENT_LAN):
+        super().__init__()
+        self.jack = jack
+        self.setFixedSize(25,25)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet(f"background-color: #0d0e11; border: 2px solid {accent_color}; border-radius: 3px;")
+
+    def mousePressEvent(self, event):
+
+        if event.button() == Qt.MouseButton.RightButton:
+            dialog = PortConfigWindow(self.jack, parent=self)
+            if dialog.exec():
+                state = "Enabled" if self.jack.enabled else "Disabled"
+                print(
+                    f"[Clicked: {self.jack.jack_id}] "
+                    f"[State: {state}] "
+                    f"[{self.jack.protocol}] "
+                    f"[{self.jack.allowed_sources}] "
+                    f"[{self.jack.target_port}] "
+                    f"[{self.jack.connected_cable}]")
+        super().mousePressEvent(event)
+
+
+class PortConfigWindow(QDialog):
+    def __init__(self, jack: PortJack, parent=None):
+        super().__init__()
+
+        self.jack = jack
+        self.setWindowTitle("Port Configuration")
+
+        layout = QFormLayout(self)
+
+        # Enable / Disable Checkbox
+        self.enabled_cb = QCheckBox("Enable / Disable Rule")
+        self.enabled_cb.setChecked(self.jack.enabled)
+        layout.addRow(self.enabled_cb)
+
+        # Protocol Selection
+        self.protocol_box = QComboBox()
+        self.protocol_box.addItems(["TCP", "UDP", "ANY"])
+        if jack.protocol in ["TCP", "UDP", "ANY"]:
+            self.protocol_box.setCurrentText(jack.protocol)
+        layout.addRow(self.protocol_box)
+
+        # Port Selection
+        self.port_entry = QLineEdit()
+        self.port_entry.setText(str(jack.target_port))
+        layout.addRow("Port:", self.port_entry)
+
+        # Allow / Deny Selection
+        self.allow_deny_box = QComboBox()
+        self.allow_deny_box.addItems(["Allow", "Deny"])
+        layout.addRow(self.allow_deny_box)
+
+        # Whitelist Entries
+        self.whitelist_entry = QLineEdit()
+        self.whitelist_entry.setPlaceholderText("IP/CIDR + Enter")
+        self.whitelist_entry.returnPressed.connect(self.add_whitelist_entry)
+        layout.addRow("Sources:", self.whitelist_entry)
+
+        self.whitelist = QListWidget()
+        self.whitelist.addItems(jack.allowed_sources)
+        self.whitelist.itemDoubleClicked.connect(self.remove_whitelist_entry)
+        layout.addRow(self.whitelist)
+
+        save_btn = QPushButton("Save")
+        save_btn.setAutoDefault(False)
+        save_btn.setDefault(False)
+        save_btn.clicked.connect(self.save_config)
+        layout.addRow(save_btn)
+
+    def add_whitelist_entry(self):
+        """
+        Adds a whitelist entry to the list widget.
+
+        TODO: Implement validation and error handling. Should check the entered format and ensure it's a valid IP/CIDR.
+        """
+        entry = self.whitelist_entry.text()
+        if entry:
+            existing = [self.whitelist.item(i).text() for i in range(self.whitelist.count())]
+            if entry not in existing:
+                self.whitelist.addItem(entry)
+            self.whitelist_entry.clear()
+
+    def remove_whitelist_entry(self, item):
+        """
+        Removes a whitelist entry from the list widget.
+        """
+        self.whitelist.takeItem(self.whitelist.row(item))
+
+    def save_config(self):
+        """
+        Saves the current configuration to the Jack instance.
+        """
+        self.add_whitelist_entry()
+        self.jack.enabled = self.enabled_cb.isChecked()
+        self.jack.protocol = self.protocol_box.currentText()
+        self.jack.target_port = self.port_entry.text().strip()
+        self.jack.allow_deny = self.allow_deny_box.currentText()
+        self.jack.allowed_sources = [self.whitelist.item(i).text() for i in range(self.whitelist.count())]
+
+        self.accept()
 
 # Subclass QMainWindow to customize your application's main window
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
+        # main outer layout
+        self.main_layout = QHBoxLayout()
 
-        self.layout = QVBoxLayout()
+        # isp bay layout
+        self.isp_bay_layout = QHBoxLayout()
+        self.main_layout.addLayout(self.isp_bay_layout)
 
+        # Patchbay rack layout
+        self.rack_layout = QVBoxLayout()
+        # Keeps rack aligned to top
+        self.rack_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.main_layout.addLayout(self.rack_layout)
+
+        # necessary idk why
         container = QFrame()
-        container.setLayout(self.layout)
+        container.setLayout(self.main_layout)
 
         # self.setFixedSize(400, 400)
 
         self.setCentralWidget(container)
 
-    def create_interface(self, quant = 1):
+    def create_interface(self, routers):
+        """
+        Creates the interface on the rack using QFrame
+        """
+        for router in routers:
 
-        for i in range(quant):
+            iface = router.interface
+            led_color = LED_ACTIVE if iface.is_up else LED_OFF
+
             # 1. Create the box widget
             chassis_box = QFrame()
+            chassis_box.setFixedHeight(100)
             chassis_box.setStyleSheet("""
                     QFrame {
                         background-color: #262a32;
@@ -31,11 +198,36 @@ class MainWindow(QMainWindow):
                 """)
 
             # 2. Give the box a layout so it holds items inside it
-            box_layout = QVBoxLayout(chassis_box)
-            box_layout.addWidget(QLabel("interface"))
+            grid = QGridLayout(chassis_box)
+            if iface.is_up:
+                label = QLabel(f"{iface.name} [UP]\n{iface.ip_addr}\n{iface.mac_addr}\n{truncate_text(iface.mac_vendor)}")
+            else:
+                label = QLabel(f"{iface.name} [DOWN]\n{iface.ip_addr}\n{iface.mac_addr}\n{truncate_text(iface.mac_vendor)}")
+
+            label.setFixedWidth(150)
+            grid.addWidget(label, 0, 0, 2, 1)
 
             # 3. Add the box to your main window's layout
-            self.layout.addWidget(chassis_box)
+            self.rack_layout.addWidget(chassis_box)
+
+            for i in range(10):
+                grid.addWidget(PortWidget(router.jacks[i], ACCENT_LAN), 0, i + 1)
+                grid.addWidget(PortWidget(router.jacks[i + 10], ACCENT_LAN), 1, i + 1)
+
+            grid.setColumnStretch(11,1)
+
+    def create_discovery_rack(self):
+        """
+        Creates the ISP bay using QFrame
+        """
+
+        default_routes = backend.get_default_interface()
+        for route in default_routes:
+            default_route = route
+
+        subnet = backend.scan_subnet(default_route)
+
+        self.create_interface(subnet)
 
 
 if __name__ == "__main__":
@@ -47,7 +239,9 @@ if __name__ == "__main__":
     # Create a Qt widget, which will be our window.
     window = MainWindow()
 
-    MainWindow.create_interface(window, 3)
+    MainWindow.create_discovery_rack(window)
+    MainWindow.create_interface(window, routers)
+
     # windows are hidden by default
     window.show()
 

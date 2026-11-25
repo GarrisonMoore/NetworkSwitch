@@ -1,10 +1,14 @@
+import ipaddress
+import json
 import os
 import platform
 import socket
-import json
+import subprocess
 import time
-import requests
+from concurrent.futures.thread import ThreadPoolExecutor
 import psutil
+import requests
+
 from Utils import Decorators
 
 timer = Decorators.timer
@@ -33,14 +37,16 @@ class PortJack:
     """
     Replicates an RJ45 port on my virtual interface
     """
-    def __init__(self, jack_id: str, jack_type: str, interface: NetworkInterface):
+    def __init__(self, jack_id: str, interface: NetworkInterface):
         self.jack_id = jack_id
-        self.jack_type = jack_type
         self.interface = interface
 
+        # port forwarding
+        self.enabled = False
         self.target_port: str = ""
+        self.allow_deny = False
+        self.allowed_sources = []
         self.protocol = None # UDP or TCP
-
         # connection state
         self.connected_cable = None
 
@@ -51,19 +57,19 @@ class RouterUnit:
     """
     Defines a single 'router' which is assigned to a single network interface.
     """
-    def __init__(self, interface: NetworkInterface, lan_ports_quant = 3):
+    def __init__(self, interface: NetworkInterface, ports_quant = 3):
         self.interface = interface
-        self.WAN_jack = PortJack(f"{interface.name}_WAN", "WAN", interface)
-        self.LAN_jacks = [
-            PortJack(f"{interface.name}_LAN{i + 1}", "LAN", interface)
-            for i in range(lan_ports_quant)
+        self.jacks = [
+            PortJack(f"{interface.name}_LAN{i + 1}", interface)
+            for i in range(ports_quant)
         ]
+
 
     def all_jacks(self) -> list[PortJack]:
         """
         Returns a list of all PortJacks
         """
-        return [self.WAN_jack] + self.LAN_jacks
+        return self.jacks
 
 class NetworkBackend:
     """
@@ -72,7 +78,7 @@ class NetworkBackend:
     def __init__(self, dry_run: bool = True):
         self.dry_run = dry_run
 
-    def get_interfaces(self) -> list[NetworkInterface]:
+    def get_all_interfaces(self) -> list[NetworkInterface]:
         """
         Returns a list of NetworkInterface Objects
         """
@@ -107,11 +113,10 @@ class NetworkBackend:
 
         return interfaces
 
-    def get_default_interface(self) -> list[str]:
+    def get_default_interface(self) -> list[NetworkInterface]:
         """
-        Gets the systems default routes
+        Gets the returns a list of the defualt routes as NetworkInterface objects
         """
-        raw_routes = ""
         default_ifaces = []
 
         try:
@@ -119,35 +124,14 @@ class NetworkBackend:
                 s.connect(("8.8.8.8", 80))
                 outbound_ip = s.getsockname()[0]
 
-            for name, addr_list in psutil.net_if_addrs().items():
-                for addr in addr_list:
-                    if addr.family == socket.AF_INET and addr.address == outbound_ip:
-                        if name not in default_ifaces:
-                            default_ifaces.append(name)
+            for iface in self.get_all_interfaces():
+                if iface.ip_addr == outbound_ip and iface not in default_ifaces:
+                    default_ifaces.append(iface)
 
         except OSError:
             pass
 
         return default_ifaces
-
-    def save_oui_cache(self, oui_cache: dict[str,str]):
-        """
-        Saves the OUI cache to the file
-        """
-        with open("oui_cache.json", "w") as f:
-            json.dump(oui_cache, f, indent=2)
-
-    def load_oui_cache(self) -> dict[str,str]:
-        """
-        Loads the OUI cache from the file
-        """
-        if os.path.exists("oui_cache.json"):
-            try:
-                with open("oui_cache.json", "r") as f:
-                    return json.load(f)
-            except json.JSONDecodeError:
-                return {}
-        return {}
 
     @timer
     def resolve_mac_vendor(self,mac_addr: str) -> str:
@@ -187,19 +171,116 @@ class NetworkBackend:
         except requests.RequestException:
             return "Lookup failed"
 
+    def save_oui_cache(self, oui_cache: dict[str,str]):
+        """
+        Saves the OUI cache to the file
+        """
+        with open("oui_cache.json", "w") as f:
+            json.dump(oui_cache, f, indent=2)
+
+
+    def load_oui_cache(self) -> dict[str,str]:
+        """
+        Loads the OUI cache from the file
+        """
+        if os.path.exists("oui_cache.json"):
+            try:
+                with open("oui_cache.json", "r") as f:
+                    return json.load(f)
+            except json.JSONDecodeError:
+                return {}
+        return {}
+
+    def ping(ip: str):
+        """
+        Helper method to ping a host on a network
+        """
+        flag_count = "-n" if os_name == "Windows" else "-c"
+        flag_wait = "-w" if os_name == "Windows" else "-W"
+        timeout = "300" if os_name == "Windows" else "1"
+
+        subprocess.run(
+            ["ping", flag_count, "1", flag_wait, timeout, ip],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+    @timer
+    def scan_subnet(self, default_route: NetworkInterface) -> list[NetworkInterface]:
+        """
+        Scans the default routes network for devices and turns them into network interface objects
+
+        Executes a ping sweep of the subnet and then reads the arp cache to get each hosts metadata
+        """
+        if not default_route or not default_route.ip_addr:
+            return []
+
+        # get the subnet of the default routes IP
+        subnet = ipaddress.IPv4Network(f"{default_route.ip_addr}/24", strict=False)
+
+        # loop through the subnet and put each host in a list
+        target_ips = [str(ip) for ip in subnet.hosts() if str(ip) != default_route.ip_addr]
+
+        # start a ping sweep of the subnet on a thread pool
+        with ThreadPoolExecutor(max_workers=64) as pool:
+            pool.map(NetworkBackend.ping, target_ips)
+
+        # read the arp cache to get each hosts metadata
+        arp_output = subprocess.check_output(["arp", "-a"], text=True, stderr=subprocess.DEVNULL)
+        local_ips = {iface.ip_addr for iface in self.get_all_interfaces() if iface.ip_addr}
+        hosts = []
+
+        # parse the arp cache output
+        for line in arp_output.splitlines():
+            parts = line.replace("(", "").replace(")", "").split()
+            ip = next((p for p in parts if p.count(".") == 3), None)
+            mac = next((p.replace("-", ":").lower() for p in parts if p.count(":") == 5 or p.count("-") == 5), None)
+
+            if ip and mac and mac != "ff:ff:ff:ff:ff:ff" and ip not in local_ips:
+                try:
+                    name = socket.gethostbyaddr(ip)[0]
+                except OSError:
+                    name = ip
+
+                # turn the resolved host into a NetworkInterface object
+                hosts.append(
+                    NetworkInterface(
+                        name=name,
+                        mac_addr=mac,
+                        mac_vendor=self.resolve_mac_vendor(mac),
+                        ip_addr=ip,
+                        is_up=True
+                    )
+                )
+        return hosts
+
 if __name__ == "__main__":
     backend = NetworkBackend()
-    interfaces = backend.get_interfaces()
+    interfaces = backend.get_all_interfaces()
 
+    # show interfaces
     print("\nInterfaces:")
     for iface in interfaces:
         print(iface)
 
-    print(f"\nDefault routes:\n{backend.get_default_interface()}\n")
+    # get default route
+    default_route = backend.get_default_interface()
+    print(f"\nDefault routes:\n{default_route}\n")
 
+    # testing portjacks
     routers = []
     for iface in interfaces:
         router = RouterUnit(iface)
         routers.append(router)
 
         print(f"{router.all_jacks()}")
+
+    print("")
+
+    # testing subnet scanning
+    for iface in default_route:
+        if iface.is_up and iface.ip_addr:
+            print(f"Scanning subnet for {iface.name} ({iface.ip_addr})...")
+            alive = backend.scan_subnet(iface)
+            for host in alive:
+                print(f"Found host: {host}")
