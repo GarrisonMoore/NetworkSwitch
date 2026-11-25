@@ -1,13 +1,10 @@
 import sys
-
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QFrame, QGridLayout,
     QDialog, QFormLayout, QCheckBox, QComboBox, QListWidgetItem, QListWidget, QScrollArea
 )
 from PySide6.QtCore import Qt
-from requests.utils import default_user_agent
-
 from Router import RouterUnit, NetworkBackend, PortJack, NetworkInterface
 
 backend = NetworkBackend()
@@ -45,10 +42,8 @@ SWITCH_RED_SHADOW = "#7f1d1d"  # Pressed-in dark red half
 SWITCH_HIGHLIGHT = "#fca5a5"  # Top edge specular highlight
 SWITCH_CREASE = "#3b0707"  # Center pivot divider line
 
-
 def truncate_text(text: str, max_len: int = 15) -> str:
     return text if len(text) <= max_len else text[:max_len - 3] + "..."
-
 
 class PortWidget(QFrame):
     def __init__(self, jack: PortJack, accent_color: str = ACCENT_LAN):
@@ -60,6 +55,8 @@ class PortWidget(QFrame):
 
     def mousePressEvent(self, event):
 
+        is_local = "Local" if self.jack.interface.is_local else "Discovered"
+
         if event.button() == Qt.MouseButton.RightButton:
             dialog = PortConfigWindow(self.jack, parent=self)
             if dialog.exec():
@@ -70,51 +67,60 @@ class PortWidget(QFrame):
                     f"[{self.jack.protocol}] "
                     f"[{self.jack.allowed_sources}] "
                     f"[{self.jack.target_port}] "
-                    f"[{self.jack.connected_cable}]")
+                    f"[{self.jack.connected_cable}]"
+                    f"[{is_local}]")
         super().mousePressEvent(event)
-
 
 class PortConfigWindow(QDialog):
     def __init__(self, jack: PortJack, parent=None):
         super().__init__()
 
         self.jack = jack
+        is_local = self.jack.interface.is_local
+
         self.setWindowTitle("Port Configuration")
 
         layout = QFormLayout(self)
 
-        # Enable / Disable Checkbox
-        self.enabled_cb = QCheckBox("Enable / Disable Rule")
-        self.enabled_cb.setChecked(self.jack.enabled)
-        layout.addRow(self.enabled_cb)
+        if is_local:
+            # Enable / Disable Checkbox
+            self.enabled_cb = QCheckBox("Enable / Disable Rule")
+            self.enabled_cb.setChecked(self.jack.enabled)
+            layout.addRow(self.enabled_cb)
 
-        # Protocol Selection
-        self.protocol_box = QComboBox()
-        self.protocol_box.addItems(["TCP", "UDP", "ANY"])
-        if jack.protocol in ["TCP", "UDP", "ANY"]:
-            self.protocol_box.setCurrentText(jack.protocol)
-        layout.addRow(self.protocol_box)
+            # Allow / Deny Selection
+            self.allow_deny_box = QComboBox()
+            self.allow_deny_box.addItems(["Allow", "Deny"])
+            layout.addRow(self.allow_deny_box)
+
+            # Protocol Selection
+            self.protocol_box = QComboBox()
+            self.protocol_box.addItems(["TCP", "UDP", "ANY"])
+            if jack.protocol in ["TCP", "UDP", "ANY"]:
+                self.protocol_box.setCurrentText(jack.protocol)
+            layout.addRow(self.protocol_box)
 
         # Port Selection
         self.port_entry = QLineEdit()
         self.port_entry.setText(str(jack.target_port))
-        layout.addRow("Port:", self.port_entry)
+        layout.addRow("Listen Port:" if is_local else "Port:", self.port_entry)
 
-        # Allow / Deny Selection
-        self.allow_deny_box = QComboBox()
-        self.allow_deny_box.addItems(["Allow", "Deny"])
-        layout.addRow(self.allow_deny_box)
+        if is_local:
+            # Whitelist Entries
+            self.whitelist_entry = QLineEdit()
+            self.whitelist_entry.setPlaceholderText("IP/CIDR + Enter")
+            self.whitelist_entry.returnPressed.connect(self.add_whitelist_entry)
+            layout.addRow("Sources:", self.whitelist_entry)
 
-        # Whitelist Entries
-        self.whitelist_entry = QLineEdit()
-        self.whitelist_entry.setPlaceholderText("IP/CIDR + Enter")
-        self.whitelist_entry.returnPressed.connect(self.add_whitelist_entry)
-        layout.addRow("Sources:", self.whitelist_entry)
+            self.whitelist = QListWidget()
+            self.whitelist.addItems(jack.allowed_sources)
+            self.whitelist.itemDoubleClicked.connect(self.remove_whitelist_entry)
+            layout.addRow(self.whitelist)
 
-        self.whitelist = QListWidget()
-        self.whitelist.addItems(jack.allowed_sources)
-        self.whitelist.itemDoubleClicked.connect(self.remove_whitelist_entry)
-        layout.addRow(self.whitelist)
+        else:
+            # if portjack is on a remote interface only allow configuring port, default target ip to the interface IP
+            self.target_ip = QLabel(f"{jack.interface.ip_addr}")
+            layout.addRow("Target: ", self.target_ip)
 
         save_btn = QPushButton("Save")
         save_btn.setAutoDefault(False)
@@ -141,16 +147,19 @@ class PortConfigWindow(QDialog):
         """
         self.whitelist.takeItem(self.whitelist.row(item))
 
-    def save_config(self):
+    def save_config(self, is_local: bool):
         """
         Saves the current configuration to the Jack instance.
         """
-        self.add_whitelist_entry()
-        self.jack.enabled = self.enabled_cb.isChecked()
-        self.jack.protocol = self.protocol_box.currentText()
-        self.jack.target_port = self.port_entry.text().strip()
-        self.jack.allow_deny = self.allow_deny_box.currentText()
-        self.jack.allowed_sources = [self.whitelist.item(i).text() for i in range(self.whitelist.count())]
+        if is_local:
+            self.add_whitelist_entry()
+            self.jack.enabled = self.enabled_cb.isChecked()
+            self.jack.protocol = self.protocol_box.currentText()
+            self.jack.target_port = self.port_entry.text().strip()
+            self.jack.allow_deny = self.allow_deny_box.currentText()
+            self.jack.allowed_sources = [self.whitelist.item(i).text() for i in range(self.whitelist.count())]
+        else:
+            self.jack.target_port = self.port_entry.text().strip()
 
         self.accept()
 
@@ -255,7 +264,7 @@ if __name__ == "__main__":
     app.styleHints().setColorScheme(Qt.ColorScheme.Dark)
     app.setStyleSheet("""
         QMainWindow, QWidget {
-            background-color; #1e1e1e;
+            background-color: #1e1e1e;
             color: #f3f4f6;
         }
         QLabel {

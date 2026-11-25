@@ -20,12 +20,13 @@ class NetworkInterface:
     """
     Represents a network interface with attributes such as name, MAC address, IP address, MAC vendor, and status.
     """
-    def __init__(self, name: str, mac_addr: str = "00:00:00:00:00:00", mac_vendor: str = "Unknown Vendor",ip_addr: str = None, is_up: bool = False):
+    def __init__(self, name: str, mac_addr: str = "00:00:00:00:00:00", mac_vendor: str = "Unknown Vendor",ip_addr: str = None, is_up: bool = False, is_local: bool = True):
         self.name = name
         self.mac_addr = mac_addr
         self.ip_addr = ip_addr
         self.mac_vendor = mac_vendor
         self.is_up = is_up
+        self.is_local = is_local
         self.connected_port = None
 
     def __str__(self) -> str:
@@ -250,7 +251,8 @@ class NetworkBackend:
                         mac_addr=mac,
                         mac_vendor=self.resolve_mac_vendor(mac),
                         ip_addr=ip,
-                        is_up=True
+                        is_up=True,
+                        is_local=False
                     )
                 )
         print(hosts)
