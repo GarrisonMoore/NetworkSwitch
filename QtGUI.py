@@ -246,18 +246,26 @@ class MainWindow(QMainWindow):
             self.remote_rack.addWidget(self.create_router_chassis(router))
 
 
-
-
 if __name__ == "__main__":
     # You need one (and only one) QApplication instance per application.
     # Pass in sys.argv to allow command line arguments for your app.
     # If you know you won't use command line arguments QApplication([]) works too.
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+    app.styleHints().setColorScheme(Qt.ColorScheme.Dark)
+    app.setStyleSheet("""
+        QMainWindow, QWidget {
+            background-color; #1e1e1e;
+            color: #f3f4f6;
+        }
+        QLabel {
+            background-color: transparent;
+            color: #f3f4f6;
+        }
+    """)
 
     # Create a Qt widget, which will be our window.
     window = MainWindow()
-
-
     window.populate_local_rack(routers)
     window.create_discovery_rack()
 
