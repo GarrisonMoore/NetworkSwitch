@@ -3,9 +3,10 @@ import sys
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QFrame, QGridLayout,
-    QDialog, QFormLayout, QCheckBox, QComboBox, QListWidgetItem, QListWidget
+    QDialog, QFormLayout, QCheckBox, QComboBox, QListWidgetItem, QListWidget, QScrollArea
 )
 from PySide6.QtCore import Qt
+from requests.utils import default_user_agent
 
 from Router import RouterUnit, NetworkBackend, PortJack, NetworkInterface
 
@@ -13,45 +14,47 @@ backend = NetworkBackend()
 routers = [RouterUnit(iface, ports_quant=20) for iface in backend.get_all_interfaces()]
 
 # --- UI Color Palette ---
-BG_CANVAS        = "#808080"  # Medium grey rack background
-BG_CHASSIS       = "#1e1e1e"  # Dark charcoal router unit housing
-BG_PORT_HOUSING  = "#2b2f36"  # Gunmetal outer RJ45 cage
-BG_PORT_RECESS   = "#1f2229"  # Dark recessed inner port face
-BG_PORT_CAVITY   = "#0d0e11"  # Near-black RJ45 socket interior
-BG_LED_HOUSING   = "#111317"  # Dark LED bezel
+BG_CANVAS = "#808080"  # Medium grey rack background
+BG_CHASSIS = "#1e1e1e"  # Dark charcoal router unit housing
+BG_PORT_HOUSING = "#2b2f36"  # Gunmetal outer RJ45 cage
+BG_PORT_RECESS = "#1f2229"  # Dark recessed inner port face
+BG_PORT_CAVITY = "#0d0e11"  # Near-black RJ45 socket interior
+BG_LED_HOUSING = "#111317"  # Dark LED bezel
 
 # Metallic Bevel Highlights & Shadows
-METAL_LIGHT_TOP  = "#c4ccd4"  # Bright brushed-steel top edge
+METAL_LIGHT_TOP = "#c4ccd4"  # Bright brushed-steel top edge
 METAL_LIGHT_LEFT = "#aeb6bf"  # Silver-grey left edge
-METAL_DARK_BOT   = "#141619"  # Deep shadow bottom edge
+METAL_DARK_BOT = "#141619"  # Deep shadow bottom edge
 METAL_DARK_RIGHT = "#181b20"  # Dark iron right edge
-METAL_TRIM       = "#5a626e"  # Mid-tone steel inner trim
-SOCKET_OUTLINE   = "#6c7582"  # Light steel socket rim
-LED_OUTLINE      = "#4a5058"  # Muted steel LED rim
+METAL_TRIM = "#5a626e"  # Mid-tone steel inner trim
+SOCKET_OUTLINE = "#6c7582"  # Light steel socket rim
+LED_OUTLINE = "#4a5058"  # Muted steel LED rim
 
 # Port Accents, Pins & Status LEDs
-ACCENT_WAN       = "#d97706"  # Amber / orange WAN stripe
-ACCENT_LAN       = "#f3f4f6"  # Crisp off-white LAN stripe
-GOLD_PIN         = "#d4af37"  # Metallic gold RJ45 contact pins
-LED_ACTIVE       = "#00ff00"  # Bright green traffic LED
-LED_OFF          = "#1a241a"  # Unlit dark LED
+ACCENT_WAN = "#d97706"  # Amber / orange WAN stripe
+ACCENT_LAN = "#f3f4f6"  # Crisp off-white LAN stripe
+GOLD_PIN = "#d4af37"  # Metallic gold RJ45 contact pins
+LED_ACTIVE = "#00ff00"  # Bright green traffic LED
+LED_OFF = "#1a241a"  # Unlit dark LED
 
 # Rocker Switch Colors
-SWITCH_BEZEL       = "#111317"  # Dark plastic outer switch housing
-SWITCH_RED_HIGH    = "#ef4444"  # Lit / raised crimson half
-SWITCH_RED_MID     = "#b91c1c"  # Unlit raised red half
-SWITCH_RED_SHADOW  = "#7f1d1d"  # Pressed-in dark red half
-SWITCH_HIGHLIGHT   = "#fca5a5"  # Top edge specular highlight
-SWITCH_CREASE      = "#3b0707"  # Center pivot divider line
+SWITCH_BEZEL = "#111317"  # Dark plastic outer switch housing
+SWITCH_RED_HIGH = "#ef4444"  # Lit / raised crimson half
+SWITCH_RED_MID = "#b91c1c"  # Unlit raised red half
+SWITCH_RED_SHADOW = "#7f1d1d"  # Pressed-in dark red half
+SWITCH_HIGHLIGHT = "#fca5a5"  # Top edge specular highlight
+SWITCH_CREASE = "#3b0707"  # Center pivot divider line
+
 
 def truncate_text(text: str, max_len: int = 15) -> str:
-    return text if len(text) <= max_len else text[:max_len -3] + "..."
+    return text if len(text) <= max_len else text[:max_len - 3] + "..."
+
 
 class PortWidget(QFrame):
     def __init__(self, jack: PortJack, accent_color: str = ACCENT_LAN):
         super().__init__()
         self.jack = jack
-        self.setFixedSize(25,25)
+        self.setFixedSize(25, 25)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(f"background-color: #0d0e11; border: 2px solid {accent_color}; border-radius: 3px;")
 
@@ -151,45 +154,43 @@ class PortConfigWindow(QDialog):
 
         self.accept()
 
+
 # Subclass QMainWindow to customize your application's main window
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
         # main outer layout
-        self.main_layout = QHBoxLayout()
+        container = QWidget()
+        self.main_layout = QHBoxLayout(container)
 
-        # isp bay layout
-        self.isp_bay_layout = QHBoxLayout()
-        self.main_layout.addLayout(self.isp_bay_layout)
+        # Left column: Local NICs
+        self.local_rack = QVBoxLayout()
+        self.local_rack.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.main_layout.addLayout(self.local_rack)
 
-        # Patchbay rack layout
-        self.rack_layout = QVBoxLayout()
-        # Keeps rack aligned to top
-        self.rack_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.main_layout.addLayout(self.rack_layout)
+        # Right column: Discovered LAN Hosts
+        self.remote_rack = QVBoxLayout()
+        self.remote_rack.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.main_layout.addLayout(self.remote_rack)
 
         # necessary idk why
-        container = QFrame()
-        container.setLayout(self.main_layout)
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(container)
+        scroll_area.setWidgetResizable(True)
+        self.setCentralWidget(scroll_area)
 
-        # self.setFixedSize(400, 400)
-
-        self.setCentralWidget(container)
-
-    def create_interface(self, routers):
+    def create_router_chassis(self, router: RouterUnit) -> QFrame:
         """
         Creates the interface on the rack using QFrame
         """
-        for router in routers:
+        status = "[UP]" if router.interface.is_up else "[DOWN]"
+        iface = router.interface
 
-            iface = router.interface
-            led_color = LED_ACTIVE if iface.is_up else LED_OFF
-
-            # 1. Create the box widget
-            chassis_box = QFrame()
-            chassis_box.setFixedHeight(100)
-            chassis_box.setStyleSheet("""
+        # 1. Create the box widget
+        chassis_box = QFrame()
+        chassis_box.setFixedHeight(100)
+        chassis_box.setStyleSheet("""
                     QFrame {
                         background-color: #262a32;
                         border: 2px solid #5a626e;
@@ -197,24 +198,27 @@ class MainWindow(QMainWindow):
                     }
                 """)
 
-            # 2. Give the box a layout so it holds items inside it
-            grid = QGridLayout(chassis_box)
-            if iface.is_up:
-                label = QLabel(f"{iface.name} [UP]\n{iface.ip_addr}\n{iface.mac_addr}\n{truncate_text(iface.mac_vendor)}")
-            else:
-                label = QLabel(f"{iface.name} [DOWN]\n{iface.ip_addr}\n{iface.mac_addr}\n{truncate_text(iface.mac_vendor)}")
+        # 2. Give the box a layout so it holds items inside it
+        grid = QGridLayout(chassis_box)
+        label = QLabel(f"{iface.name} {status}\n"
+                       f"{iface.ip_addr}\n"
+                       f"{iface.mac_addr}\n"
+                       f"{truncate_text(iface.mac_vendor)}")
 
-            label.setFixedWidth(150)
-            grid.addWidget(label, 0, 0, 2, 1)
+        label.setFixedWidth(150)
+        grid.addWidget(label, 0, 0, 2, 1)
 
-            # 3. Add the box to your main window's layout
-            self.rack_layout.addWidget(chassis_box)
+        for i in range(10):
+            grid.addWidget(PortWidget(router.jacks[i], ACCENT_LAN), 0, i + 1)
+            grid.addWidget(PortWidget(router.jacks[i + 10], ACCENT_LAN), 1, i + 1)
 
-            for i in range(10):
-                grid.addWidget(PortWidget(router.jacks[i], ACCENT_LAN), 0, i + 1)
-                grid.addWidget(PortWidget(router.jacks[i + 10], ACCENT_LAN), 1, i + 1)
+        grid.setColumnStretch(11, 1)
+        return chassis_box
 
-            grid.setColumnStretch(11,1)
+    def populate_local_rack(self, local_routers: list[RouterUnit]):
+        for router in local_routers:
+            chassis_box = self.create_router_chassis(router)
+            self.local_rack.addWidget(chassis_box)
 
     def create_discovery_rack(self):
         """
@@ -222,12 +226,16 @@ class MainWindow(QMainWindow):
         """
 
         default_routes = backend.get_default_interface()
-        for route in default_routes:
-            default_route = route
+        if not default_routes:
+            return
 
-        subnet = backend.scan_subnet(default_route)
+        discovered_ifaces = backend.scan_subnet(default_routes[0])
+        remote_routers = [RouterUnit(iface, ports_quant=20) for iface in discovered_ifaces]
 
-        self.create_interface(subnet)
+        for router in remote_routers:
+            self.remote_rack.addWidget(self.create_router_chassis(router))
+
+
 
 
 if __name__ == "__main__":
@@ -239,8 +247,9 @@ if __name__ == "__main__":
     # Create a Qt widget, which will be our window.
     window = MainWindow()
 
-    MainWindow.create_discovery_rack(window)
-    MainWindow.create_interface(window, routers)
+
+    window.populate_local_rack(routers)
+    window.create_discovery_rack()
 
     # windows are hidden by default
     window.show()

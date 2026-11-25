@@ -191,6 +191,7 @@ class NetworkBackend:
                 return {}
         return {}
 
+    @staticmethod
     def ping(ip: str):
         """
         Helper method to ping a host on a network
@@ -252,6 +253,7 @@ class NetworkBackend:
                         is_up=True
                     )
                 )
+        print(hosts)
         return hosts
 
 if __name__ == "__main__":
