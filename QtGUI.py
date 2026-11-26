@@ -48,29 +48,37 @@ def truncate_text(text: str, max_len: int = 15) -> str:
     return text if len(text) <= max_len else text[:max_len - 3] + "..."
 
 class PortWidget(QFrame):
+    clicked_port = Signal(object)
+
     def __init__(self, jack: PortJack, accent_color: str = ACCENT_LAN):
         super().__init__()
         self.jack = jack
+        self.default_accent = accent_color
+        self.is_selected = False
         self.setFixedSize(25, 25)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(f"background-color: #0d0e11; border: 2px solid {accent_color}; border-radius: 3px;")
+        self.refresh_style()
+
+    def refresh_style(self):
+        if self.is_selected:
+            border = ACCENT_WAN
+        elif self.jack.connected_cable is not None:
+            border = "#38bdf8"
+        elif self.jack.enabled:
+            border = LED_ACTIVE
+        else:
+            border = self.default_accent
+        self.setStyleSheet(f"background-color: #0d0e11; border: 2px solid {border}; border-radius: 3px;")
 
     def mousePressEvent(self, event):
-
-        is_local = "Local" if self.jack.interface.is_local else "Discovered"
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked_port.emit(self)
 
         if event.button() == Qt.MouseButton.RightButton:
             dialog = PortConfigWindow(self.jack, parent=self)
             if dialog.exec():
-                state = "Enabled" if self.jack.enabled else "Disabled"
-                print(
-                    f"[Clicked: {self.jack.jack_id}] "
-                    f"[State: {state}] "
-                    f"[{self.jack.protocol}] "
-                    f"[{self.jack.allowed_sources}] "
-                    f"[{self.jack.target_port}] "
-                    f"[{self.jack.connected_cable}]"
-                    f"[{is_local}]")
+                self.refresh_style()
         super().mousePressEvent(event)
 
 class PortConfigWindow(QDialog):
@@ -104,7 +112,7 @@ class PortConfigWindow(QDialog):
 
         # Port Selection
         self.port_entry = QLineEdit()
-        self.port_entry.setText(str(jack.target_port))
+        self.port_entry.setText(str(jack.port))
         layout.addRow("Listen Port:" if is_local else "Port:", self.port_entry)
 
         if is_local:
@@ -115,7 +123,7 @@ class PortConfigWindow(QDialog):
             layout.addRow("Sources:", self.whitelist_entry)
 
             self.whitelist = QListWidget()
-            self.whitelist.addItems(jack.allowed_sources)
+            self.whitelist.addItems(jack.target_ips)
             self.whitelist.itemDoubleClicked.connect(self.remove_whitelist_entry)
             layout.addRow(self.whitelist)
 
@@ -157,11 +165,12 @@ class PortConfigWindow(QDialog):
             self.add_whitelist_entry()
             self.jack.enabled = self.enabled_cb.isChecked()
             self.jack.protocol = self.protocol_box.currentText()
-            self.jack.target_port = self.port_entry.text().strip()
+            self.jack.port = self.port_entry.text().strip()
             self.jack.allow_deny = self.allow_deny_box.currentText()
-            self.jack.allowed_sources = [self.whitelist.item(i).text() for i in range(self.whitelist.count())]
+            self.jack.target_ips = [self.whitelist.item(i).text() for i in range(self.whitelist.count())]
         else:
-            self.jack.target_port = self.port_entry.text().strip()
+            self.jack.port = self.port_entry.text().strip()
+            self.jack.target_ips = self.jack.interface.ip_addr
 
         self.accept()
 
@@ -201,6 +210,9 @@ class MainWindow(QMainWindow):
         scroll_area.setWidgetResizable(True)
         self.setCentralWidget(scroll_area)
 
+    def on_port_clicked(self, port_widget: PortWidget):
+        print(f"Left-clicked: {port_widget.jack.jack_id} (Local={port_widget.jack.interface.is_local})")
+
     def create_router_chassis(self, router: RouterUnit) -> QFrame:
         """
         Creates the interface on the rack using QFrame
@@ -233,8 +245,12 @@ class MainWindow(QMainWindow):
         grid.addWidget(label, 0, 0, 2, 1)
 
         for i in range(10):
-            grid.addWidget(PortWidget(router.jacks[i], ACCENT_LAN), 0, i + 1)
-            grid.addWidget(PortWidget(router.jacks[i + 10], ACCENT_LAN), 1, i + 1)
+            top_port = PortWidget(router.jacks[i], ACCENT_LAN)
+            bot_port = PortWidget(router.jacks[i + 10], ACCENT_LAN)
+            top_port.clicked_port.connect(self.on_port_clicked)
+            bot_port.clicked_port.connect(self.on_port_clicked)
+            grid.addWidget(top_port, 0, i + 1)
+            grid.addWidget(bot_port, 1, i + 1)
 
         grid.setColumnStretch(11, 1)
         return chassis_box
